@@ -352,13 +352,6 @@ module axi4l_slv_top #(
             rd_data <= 'b0;
         end else if (rd_req && rd_addr == 'd0) begin
             rd_data <= reg_a_b;
-        end
-    end
-
-    // Register.Field C.D
-    always_ff @ (posedge aclk) begin
-        if (!aresetn) begin
-            rd_data <= 'b0;
         end else if (rd_req && rd_addr == 'd1) begin
             rd_data <= reg_c_d;
         end
