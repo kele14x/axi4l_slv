@@ -63,13 +63,11 @@ module axi4l_slv_top #(
         S_WRIDLE, // idle, waiting for both write address and write data
         S_WRADDR, // write data is provided, waiting for write address
         S_WRDATA, // write address is provided, waiting for write data
-        S_WRWAIT, // both write data and address is provided, wait `wr_ack`
-        S_WRRESP  // `wr_ack` is assert, response to axi master
+        S_WRDEC,  // write transaction decode
+        S_WRRESP  // response to axi master
     } wr_state, wr_state_next;
 
     var logic wr_valid, wr_addr_valid, wr_data_valid;
-    var logic wr_ack;
-    var logic [4:0] wr_cnt;
 
     always @ (posedge aclk) begin
         if (!aresetn) begin
@@ -79,16 +77,15 @@ module axi4l_slv_top #(
         end
     end
 
-    always @ (*) begin
+    always_comb begin
         case (wr_state)
             S_WRRST  : wr_state_next = S_WRIDLE;
-            S_WRIDLE : wr_state_next = (s_axi_awvalid && s_axi_wvalid) ? S_WRWAIT :
-                s_axi_awvalid ? S_WRADDR :
-                    s_axi_wvalid  ? S_WRDATA :
-                        S_WRIDLE;
-            S_WRADDR : wr_state_next = !s_axi_wvalid  ? S_WRADDR : S_WRWAIT;
-            S_WRDATA : wr_state_next = !s_axi_awvalid ? S_WRDATA : S_WRWAIT;
-            S_WRWAIT : wr_state_next = !(wr_ack || wr_cnt[4]) ? S_WRWAIT : S_WRRESP;
+            S_WRIDLE : wr_state_next = (s_axi_awvalid && s_axi_wvalid) ? S_WRDEC :
+                                                         s_axi_awvalid ? S_WRADDR :
+                                                         s_axi_wvalid  ? S_WRDATA : S_WRIDLE;
+            S_WRADDR : wr_state_next = !s_axi_wvalid  ? S_WRADDR : S_WRDEC;
+            S_WRDATA : wr_state_next = !s_axi_awvalid ? S_WRDATA : S_WRDEC;
+            S_WRDEC  : wr_state_next = S_WRRESP;
             S_WRRESP : wr_state_next = !s_axi_bready  ? S_WRRESP : S_WRIDLE;
             default  : wr_state_next = S_WRRST;
         endcase
@@ -163,24 +160,13 @@ module axi4l_slv_top #(
     // Write response channel
     //------------------------
 
-    var logic wr_req;
+    var logic wr_req, wr_dec_err;
 
     always @ (posedge aclk) begin
         if (!aresetn) begin
             wr_req <= 1'b0;
         end else begin
             wr_req <= wr_valid;
-        end
-    end
-
-    // Time out counter of waiting for `wr_ack`
-    always_ff @ (posedge aclk) begin
-        if (!aresetn) begin
-            wr_cnt <= 5'h1F;
-        end else if (wr_state_next == S_WRWAIT) begin
-            wr_cnt <= wr_cnt + 1;
-        end else begin
-            wr_cnt <= 5'h1F;
         end
     end
 
@@ -195,10 +181,8 @@ module axi4l_slv_top #(
     always @ (posedge aclk) begin
         if (!aresetn) begin
             s_axi_bresp <= 0;
-        end else if (wr_state == S_WRWAIT && wr_ack) begin
-            s_axi_bresp <= C_RESP_OKAY;
-        end else if (wr_state == S_WRWAIT && wr_cnt[4]) begin
-            s_axi_bresp <= C_RESP_SLVERR; // Time out, response a error
+        end else if (wr_req) begin
+            s_axi_bresp <= wr_dec_err ? C_RESP_DECERR : C_RESP_OKAY;
         end
     end
 
@@ -326,20 +310,17 @@ module axi4l_slv_top #(
             reg_a_b <= 'b0;
         end else if (wr_req && wr_addr == 'd0) begin
             reg_a_b <= wr_data;
+        end else begin
+            reg_a_b <= reg_a_b;
         end
     end
 
-    // Write response
-    //---------------
-
-    always_ff @ (posedge aclk) begin
-        if (!aresetn) begin
-            wr_ack <= 1'b0;
-        end else if (wr_req && wr_addr == 'd0) begin
-            wr_ack <= 1'b1;
-        end else begin
-            wr_ack <= 1'b0;
-        end
+    // If master is tring to write to a hole register, return a decode error
+    always_comb begin
+        case (wr_addr)
+            'd0    : wr_dec_err = 1'b0;
+            default: wr_dec_err = 1'b1;
+        endcase
     end
 
 
